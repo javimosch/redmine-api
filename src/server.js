@@ -12,6 +12,7 @@ import basicAuth from 'express-basic-auth';
 import mongoose from 'mongoose';
 import appConfigRoutes from './routes/appConfigRoutes.js';
 import { getConfig, refreshConfig } from './utils/configLoader.js';
+import apiAuthMiddleware from './middlewares/api-auth-middleware.js';
 
 dotenv.config(); // Load environment variables from .env file
 
@@ -37,6 +38,16 @@ const swaggerOptions = {
         description: 'Development server',
       },
     ],
+    components: {
+      securitySchemes: {
+        ApiKeyAuth: {
+          type: 'apiKey',
+          in: 'header',
+          name: 'Authorization',
+          description: 'API key authentication. Format: "Bearer YOUR_API_KEY"'
+        }
+      }
+    }
   },
   apis: ['./src/server.js'], // files containing annotations as JSDoc
 };
@@ -47,6 +58,15 @@ const swaggerSpec = swaggerJsdoc(swaggerOptions);
 const SWAGGER_USER = process.env.SWAGGER_USER;
 const SWAGGER_PASSWORD = process.env.SWAGGER_PASSWORD;
 
+// Configure Swagger UI with additional options
+const swaggerUiOptions = {
+  explorer: true,
+  swaggerOptions: {
+    persistAuthorization: true, // Keep auth data between page refreshes
+  }
+};
+
+// Apply basic auth to Swagger UI if credentials are provided
 if (SWAGGER_USER && SWAGGER_PASSWORD) {
   app.use('/api-docs', basicAuth({
     users: { [SWAGGER_USER]: SWAGGER_PASSWORD },
@@ -57,7 +77,22 @@ if (SWAGGER_USER && SWAGGER_PASSWORD) {
 } else {
   logger.info('src/server.js Swagger UI /api-docs is not protected (SWAGGER_USER or SWAGGER_PASSWORD not set).');
 }
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+
+// Serve Swagger UI with the enhanced options
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, swaggerUiOptions));
+logger.info('src/server.js Swagger UI configured with API key authentication support');
+
+// --- Application Routes and Middleware Order ---
+
+// 1. App Configuration Route (uses its own basic auth defined within appConfigRoutes)
+app.use('/api/app/configure', appConfigRoutes);
+logger.info('src/server.js /api/app/configure route registered.');
+
+// 2. API Key Authentication Middleware for all other /api/* routes that follow
+// This middleware (from api-auth-middleware.js) will be applied to subsequent /api routes.
+// It has internal skips for OPTIONS, Swagger paths (as a safeguard), etc.
+app.use('/api', apiAuthMiddleware); 
+logger.info('src/server.js API Key Auth Middleware registered for subsequent /api routes.');
 
 // --- Scheduled Tasks Configuration ---
 // Initial values from environment (these will be potentially overridden by DB settings later)
@@ -148,6 +183,55 @@ const scheduleLocalSearchTask = (schedule) => {
 
 // --- API Endpoints ---
 
+// The old generic /api wrapper has been removed and replaced by specific ordering above.
+
+/**
+ * @swagger
+ * components:
+ *   securitySchemes:
+ *     ApiKeyAuth:
+ *       type: apiKey
+ *       in: header
+ *       name: Authorization
+ *       description: API key authentication. Format: "Bearer YOUR_API_KEY"
+ */
+
+/**
+ * @swagger
+ * components:
+ *   schemas:
+ *     HealthCheck:
+ *       type: object
+ *       properties:
+ *         status:
+ *           type: string
+ *           description: Service status
+ *           example: ok
+ *         timestamp:
+ *           type: string
+ *           format: date-time
+ *           description: Current server timestamp
+ */
+
+/**
+ * @swagger
+ * /health:
+ *   get:
+ *     summary: Health check endpoint
+ *     description: Returns the current status of the API
+ *     tags: [System]
+ *     responses:
+ *       200:
+ *         description: API is running
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/HealthCheck'
+ */
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
 /**
  * @swagger
  * components:
@@ -206,40 +290,309 @@ const scheduleLocalSearchTask = (schedule) => {
 
 /**
  * @swagger
+ * components:
+ *   responses:
+ *     UnauthorizedError:
+ *       description: Unauthorized - API key is missing or invalid
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               error:
+ *                 type: string
+ *                 example: "Unauthorized - Valid API key required"
+ *     ServerError:
+ *       description: Server error occurred while processing the request
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               error:
+ *                 type: string
+ *                 example: "An unexpected error occurred while processing your request"
+ *   parameters:
+ *     pageParam:
+ *       in: query
+ *       name: page
+ *       required: false
+ *       schema:
+ *         type: integer
+ *         minimum: 1
+ *         default: 1
+ *       description: Page number for pagination (1-based index)
+ *     limitParam:
+ *       in: query
+ *       name: limit
+ *       required: false
+ *       schema:
+ *         type: integer
+ *         minimum: 1
+ *         maximum: 100
+ *       description: Number of items per page (overrides the default from settings, max 100)
+ *     searchQueryParam:
+ *       in: query
+ *       name: q
+ *       required: false
+ *       schema:
+ *         type: string
+ *       description: Optional search query to filter issues (searches across all fields)
+ *   schemas:
+ *     PaginationMetadata:
+ *       type: object
+ *       properties:
+ *         total:
+ *           type: integer
+ *           description: Total number of items across all pages
+ *           example: 125
+ *         page:
+ *           type: integer
+ *           description: Current page number (1-based index)
+ *           example: 1
+ *         limit:
+ *           type: integer
+ *           description: Number of items per page
+ *           example: 20
+ *         pages:
+ *           type: integer
+ *           description: Total number of pages
+ *           example: 7
+ * 
+ * /api/issues:
+ *   get:
+ *     summary: Retrieve all issues with pagination
+ *     description: |
+ *       Get a paginated list of all issues across all years.
+ *       
+ *       ### Pagination
+ *       - Uses 1-based page numbering
+ *       - Default page size is configured in settings (defaults to 20 if not set)
+ *       - Maximum page size is 100 items
+ *       
+ *       ### Search
+ *       - Use the `q` parameter to search across all issue fields
+ *       - Search is case-insensitive
+ *     tags: [Issues]
+ *     security:
+ *       - ApiKeyAuth: []
+ *     parameters:
+ *       - $ref: '#/components/parameters/pageParam'
+ *       - $ref: '#/components/parameters/limitParam'
+ *       - $ref: '#/components/parameters/searchQueryParam'
+ *     responses:
+ *       200:
+ *         description: A paginated list of issues
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/Issue'
+ *                   description: Array of issue objects
+ *                 pagination:
+ *                   $ref: '#/components/schemas/PaginationMetadata'
+ *       400:
+ *         description: Invalid request parameters
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: "Invalid page number. Must be a positive integer"
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
+ */
+
+/**
+ * @swagger
  * /api/issues/{year}:
  *   get:
  *     summary: Retrieve issues for a specific year, optionally filtered by a query string.
  *     tags: [Issues]
+ *     security:
+ *       - ApiKeyAuth: []
  *     parameters:
  *       - in: path
  *         name: year
- *         schema:
- *           type: string
- *           pattern: '^[0-9]{4}$'
  *         required: true
- *         description: The year to retrieve issues for (e.g., 2024).
- *       - in: query
- *         name: q
  *         schema:
- *           type: string
- *         required: false
- *         description: Optional query string to filter issues. The filter is applied to the entire JSON content of each issue.
+ *           type: integer
+ *           minimum: 2000
+ *           maximum: 2100
+ *         description: The year to get issues for (e.g., 2023)
+ *         example: 2023
+ *       - $ref: '#/components/parameters/pageParam'
+ *       - $ref: '#/components/parameters/limitParam'
+ *       - $ref: '#/components/parameters/searchQueryParam'
  *     responses:
  *       200:
- *         description: A list of issues.
+ *         description: A paginated list of issues for the specified year
  *         content:
  *           application/json:
  *             schema:
- *               type: array
- *               items:
- *                 $ref: '#/components/schemas/Issue'
+ *               type: object
+ *               properties:
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/Issue'
+ *                   description: Array of issue objects for the specified year
+ *                 pagination:
+ *                   $ref: '#/components/schemas/PaginationMetadata'
  *       400:
- *         description: Invalid year format.
+ *         description: Invalid request parameters
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: "Invalid year format. Must be a 4-digit year between 2000-2100"
  *       404:
- *         description: No data found for the specified year.
+ *         description: No issues found for the specified year
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: "No issues found for year 2023"
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
  *       500:
- *         description: Internal server error.
+ *         $ref: '#/components/responses/ServerError'
  */
+
+// Paginated endpoint for all issues across all years
+app.get('/api/issues', async (req, res) => {
+  const fileName = 'src/server.js';
+  const functionName = 'GET /api/issues';
+  
+  try {
+    logger.info(`${fileName} ${functionName} Request received`, { data: { query: req.query } });
+    
+    // Get pagination parameters
+    const page = parseInt(req.query.page) || 1;
+    let limit = parseInt(req.query.limit) || 0;
+    const searchQuery = req.query.q;
+    
+    // If limit is not specified in the query, get it from settings
+    if (!limit) {
+      const config = await getConfig();
+      limit = config.itemsPerPage || 10;
+      logger.debug(`${fileName} ${functionName} Using itemsPerPage from config: ${limit}`);
+    }
+    
+    // Ensure limit is within reasonable bounds
+    limit = Math.min(Math.max(limit, 1), 100);
+    
+    // Calculate skip value for pagination
+    const skip = (page - 1) * limit;
+    
+    // Get all years from the data directory
+    let allYears = [];
+    try {
+      const dirContents = await fs.readdir(DATA_DIR);
+      allYears = dirContents
+        .filter(item => /^\d{4}$/.test(item)) // Only include directories named as years (YYYY)
+        .sort((a, b) => b.localeCompare(a)); // Sort years in descending order
+      
+      logger.info(`${fileName} ${functionName} Found ${allYears.length} year directories`, { data: { years: allYears } });
+    } catch (dirError) {
+      logger.error(`${fileName} ${functionName} Error reading data directory`, 
+        { message: dirError.message, stack: dirError.stack });
+      return res.status(500).json({ error: 'Failed to read issue data' });
+    }
+    
+    // Collect issues from all years
+    let allIssues = [];
+    
+    for (const year of allYears) {
+      const yearDir = path.join(DATA_DIR, year);
+      try {
+        const files = await fs.readdir(yearDir);
+        
+        for (const file of files) {
+          if (file.endsWith('.json')) {
+            try {
+              const filePath = path.join(yearDir, file);
+              const fileContent = await fs.readFile(filePath, 'utf8');
+              const issueData = JSON.parse(fileContent);
+              
+              // Add year information to help with filtering/sorting
+              issueData._year = year;
+              allIssues.push(issueData);
+            } catch (fileError) {
+              logger.warn(`${fileName} ${functionName} Error reading issue file ${year}/${file}`, 
+                { message: fileError.message, stack: fileError.stack });
+              // Continue with other files
+            }
+          }
+        }
+      } catch (yearError) {
+        logger.warn(`${fileName} ${functionName} Error reading year directory ${year}`, 
+          { message: yearError.message, stack: yearError.stack });
+        // Continue with other years
+      }
+    }
+    
+    // Sort issues by updated_on date (newest first)
+    allIssues.sort((a, b) => {
+      const dateA = new Date(a.updated_on || a.created_on || 0);
+      const dateB = new Date(b.updated_on || b.created_on || 0);
+      return dateB - dateA;
+    });
+    
+    // Apply search filter if query parameter is provided
+    let filteredIssues = allIssues;
+    if (searchQuery) {
+      logger.info(`${fileName} ${functionName} Filtering ${allIssues.length} issues with query: '${searchQuery}'`);
+      filteredIssues = allIssues.filter(issue => {
+        // Perform a case-insensitive search on the stringified JSON content
+        const issueStr = JSON.stringify(issue).toLowerCase();
+        return issueStr.includes(searchQuery.toLowerCase());
+      });
+      logger.info(`${fileName} ${functionName} Found ${filteredIssues.length} issues after filtering`);
+    }
+    
+    // Calculate pagination values
+    const total = filteredIssues.length;
+    const pages = Math.ceil(total / limit);
+    
+    // Apply pagination
+    const paginatedIssues = filteredIssues.slice(skip, skip + limit);
+    
+    logger.info(`${fileName} ${functionName} Returning paginated issues`, 
+      { data: { page, limit, total, count: paginatedIssues.length } });
+    
+    // Return paginated results
+    res.json({
+      data: paginatedIssues,
+      pagination: {
+        total,
+        page,
+        limit,
+        pages
+      }
+    });
+  } catch (error) {
+    logger.error(`${fileName} ${functionName} Error retrieving issues`, 
+      { message: error.message, stack: error.stack });
+    res.status(500).json({ error: 'Failed to retrieve issues' });
+  }
+});
+
+// Endpoint for issues from a specific year
 app.get('/api/issues/:year', async (req, res) => {
   const apiFileName = 'src/server.js';
   const apiFunctionName = '/api/issues/:year';
@@ -301,10 +654,11 @@ app.get('/api/issues/:year', async (req, res) => {
 });
 
 // Serve static files from 'public' directory (for admin page)
+// Serve static files from 'public' directory (for admin page, etc.)
 app.use(express.static('public'));
+logger.info('src/server.js Static file serving from public directory enabled.');
 
-// Register app configuration routes
-app.use('/api/app/configure', appConfigRoutes);
+// Note: appConfigRoutes is now registered earlier, before the generic API key auth.
 
 // --- MongoDB Connection ---
 const connectDB = async () => {

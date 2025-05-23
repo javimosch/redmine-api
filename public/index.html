@@ -80,6 +80,12 @@
           <p class="text-sm text-gray-500 mt-1">Cron schedule for syncing issues from Redmine (e.g., "0 */6 * * *" for every 6 hours)</p>
         </div>
         
+        <div class="form-group">
+          <label for="apiKeys" class="form-label">API Keys</label>
+          <textarea id="apiKeys" name="apiKeys" rows="5" class="form-input font-mono text-sm" placeholder="Enter one API key per line"></textarea>
+          <p class="text-sm text-gray-500 mt-1">One API key per line. These keys will be used to authenticate API requests.</p>
+        </div>
+        
         <div class="flex justify-end space-x-3 mt-6">
           <button type="button" id="reset-btn" class="btn btn-secondary">Reset</button>
           <button type="submit" id="save-btn" class="btn btn-primary">Save Settings</button>
@@ -137,20 +143,28 @@
       const loadSettings = async () => {
         try {
           console.log('public/index.html loadSettings Fetching current application settings');
-          const response = await fetch('/api/app/configure');
+          // Include API keys in the response
+          const response = await fetch('/api/app/configure?includeApiKeys=true');
           
           if (!response.ok) {
             throw new Error(`HTTP error ${response.status}: ${await response.text()}`);
           }
           
           const settings = await response.json();
-          console.log('public/index.html loadSettings Settings retrieved successfully', { data: settings });
+          console.log('public/index.html loadSettings Settings retrieved successfully', { 
+            data: { 
+              ...settings, 
+              // Don't log actual API keys in the console
+              apiKeys: settings.apiKeys ? ['*** keys hidden in log ***'] : [] 
+            } 
+          });
           
           // Update form fields
           document.getElementById('itemsPerPage').value = settings.itemsPerPage || '';
           document.getElementById('logLevel').value = settings.logLevel || 'INFO';
           document.getElementById('localSearchCronSchedule').value = settings.localSearchCronSchedule || '';
           document.getElementById('syncIssuesCronSchedule').value = settings.syncIssuesCronSchedule || '';
+          document.getElementById('apiKeys').value = settings.apiKeys ? settings.apiKeys.join('\n') : '';
           
           // Update last updated timestamp
           if (settings.lastUpdated) {
@@ -199,11 +213,19 @@
       settingsForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         
+        // Get API keys from textarea and split into array, removing empty lines and trimming whitespace
+        const apiKeysText = document.getElementById('apiKeys').value || '';
+        const apiKeys = apiKeysText
+          .split('\n')
+          .map(key => key.trim())
+          .filter(key => key.length > 0);
+          
         const formData = {
           itemsPerPage: document.getElementById('itemsPerPage').value,
           logLevel: document.getElementById('logLevel').value,
           localSearchCronSchedule: document.getElementById('localSearchCronSchedule').value,
           syncIssuesCronSchedule: document.getElementById('syncIssuesCronSchedule').value,
+          apiKeys: apiKeys
         };
         
         await saveSettings(formData);

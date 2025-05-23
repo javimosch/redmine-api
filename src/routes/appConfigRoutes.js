@@ -3,12 +3,15 @@ import basicAuth from 'express-basic-auth';
 import Settings from '../models/Settings.js';
 import { logger } from '../utils/logger.js';
 import { refreshConfig } from '../utils/configLoader.js';
+import apiAuthMiddleware from '../middlewares/api-auth-middleware.js';
+import bcrypt from 'bcrypt';
 
 const router = express.Router();
 const fileName = 'src/routes/appConfigRoutes.js';
 
 // Basic authentication middleware for admin routes
 const setupAuthMiddleware = () => {
+
   const adminUser = process.env.ADMIN_USER;
   const adminPassword = process.env.ADMIN_PASSWORD;
 
@@ -25,8 +28,10 @@ const setupAuthMiddleware = () => {
   }
 };
 
-// Apply authentication middleware
+// Apply authentication middleware to all routes in this router
 router.use(setupAuthMiddleware());
+
+router.use('/api', apiAuthMiddleware);
 
 /**
  * GET /api/app/configure
@@ -45,8 +50,15 @@ router.get('/', async (req, res) => {
       logLevel: settings.logLevel,
       localSearchCronSchedule: settings.localSearchCronSchedule,
       syncIssuesCronSchedule: settings.syncIssuesCronSchedule,
+      // Only include API keys count, not the actual keys
+      apiKeysCount: settings.apiKeys ? settings.apiKeys.length : 0,
       lastUpdated: settings.updatedAt || new Date()
     };
+    
+    // For admin UI, include the actual API keys
+    if (req.query.includeApiKeys === 'true') {
+      sanitizedSettings.apiKeys = settings.apiKeys || [];
+    }
     
     logger.info(`${fileName} ${functionName} Settings retrieved successfully`);
     res.json(sanitizedSettings);
@@ -57,6 +69,16 @@ router.get('/', async (req, res) => {
   }
 });
 
+function hashKeys(apiKeys){
+  return apiKeys.map(apiKey => {
+    if (apiKey.startsWith('bcrypt:')) {
+      return apiKey;
+    } else {
+      return `bcrypt:`+bcrypt.hashSync(apiKey, 10);
+    }
+  });
+}
+
 /**
  * POST /api/app/configure
  * Update application settings
@@ -65,8 +87,9 @@ router.post('/', async (req, res) => {
   const functionName = 'POST /api/app/configure';
   logger.info(`${fileName} ${functionName} Request received`, { data: req.body });
 
+  
   try {
-    const { itemsPerPage, logLevel, localSearchCronSchedule, syncIssuesCronSchedule } = req.body;
+    const { itemsPerPage, logLevel, localSearchCronSchedule, syncIssuesCronSchedule, apiKeys } = req.body;
     
     // Validate inputs
     const errors = [];
@@ -109,6 +132,12 @@ router.post('/', async (req, res) => {
       if (localSearchCronSchedule !== undefined) newSettings.localSearchCronSchedule = localSearchCronSchedule;
       if (syncIssuesCronSchedule !== undefined) newSettings.syncIssuesCronSchedule = syncIssuesCronSchedule;
       
+
+      //only if not hashed
+      if (apiKeys !== undefined){
+        newSettings.apiKeys = hashKeys(apiKeys);
+      }
+      
       await newSettings.save();
       logger.info(`${fileName} ${functionName} New settings created successfully`);
       
@@ -122,7 +151,7 @@ router.post('/', async (req, res) => {
           logLevel: newSettings.logLevel,
           localSearchCronSchedule: newSettings.localSearchCronSchedule,
           syncIssuesCronSchedule: newSettings.syncIssuesCronSchedule,
-        }
+          }
       });
     }
     
@@ -131,6 +160,7 @@ router.post('/', async (req, res) => {
     if (logLevel !== undefined) settings.logLevel = logLevel;
     if (localSearchCronSchedule !== undefined) settings.localSearchCronSchedule = localSearchCronSchedule;
     if (syncIssuesCronSchedule !== undefined) settings.syncIssuesCronSchedule = syncIssuesCronSchedule;
+    if (apiKeys !== undefined) settings.apiKeys = hashKeys(apiKeys);
     
     await settings.save();
     logger.info(`${fileName} ${functionName} Settings updated successfully`);

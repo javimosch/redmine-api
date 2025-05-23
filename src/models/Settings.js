@@ -6,7 +6,12 @@ const settingsSchema = new mongoose.Schema({
     type: String,
     default: 'global_settings',
     unique: true,
-    index: true 
+    index: true // Add index for faster lookups on configKey
+  },
+  apiKeys: {
+    type: [String],
+    default: [],
+    //select: false // Don't return this field by default in queries
   },
   itemsPerPage: {
     type: Number,
