@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  redmine-data-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: redmine_data_server
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./:/usr/src/app
+    env_file:
+      - .env # Docker Compose will use variables from this file
+    restart: unless-stopped
+    # Add logging configuration if desired
+    # logging:
+    #   driver: "json-file"
+    #   options:
+    #     max-size: "10m"
+    #     max-file: "3"

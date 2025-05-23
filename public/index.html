@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Redmine App Admin</title>
+  <!-- Tailwind CSS via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style type="text/tailwindcss">
+    @layer components {
+      .form-input {
+        @apply w-full p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500;
+      }
+      .form-label {
+        @apply block text-sm font-medium text-gray-700 mb-1;
+      }
+      .form-group {
+        @apply mb-4;
+      }
+      .btn {
+        @apply px-4 py-2 rounded-md text-white font-medium focus:outline-none focus:ring-2 focus:ring-offset-2;
+      }
+      .btn-primary {
+        @apply bg-blue-600 hover:bg-blue-700 focus:ring-blue-500;
+      }
+      .btn-secondary {
+        @apply bg-gray-600 hover:bg-gray-700 focus:ring-gray-500;
+      }
+      .alert {
+        @apply p-4 mb-4 rounded-md;
+      }
+      .alert-success {
+        @apply bg-green-100 text-green-800 border border-green-200;
+      }
+      .alert-error {
+        @apply bg-red-100 text-red-800 border border-red-200;
+      }
+    }
+  </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+  <div class="container mx-auto p-4 max-w-3xl">
+    <header class="mb-8">
+      <h1 class="text-3xl font-bold text-gray-900 mb-2">Redmine App Admin Panel</h1>
+      <p class="text-gray-600">Configure application settings</p>
+    </header>
+
+    <div id="status-message" class="hidden"></div>
+
+    <div class="bg-white shadow-md rounded-md p-6 mb-8">
+      <h2 class="text-xl font-semibold mb-4 text-gray-800">Global Settings</h2>
+      
+      <form id="settings-form" class="space-y-4">
+        <div class="form-group">
+          <label for="itemsPerPage" class="form-label">Items Per Page</label>
+          <input type="number" id="itemsPerPage" name="itemsPerPage" min="1" max="100" class="form-input">
+          <p class="text-sm text-gray-500 mt-1">Number of items to display per page (1-100)</p>
+        </div>
+        
+        <div class="form-group">
+          <label for="logLevel" class="form-label">Log Level</label>
+          <select id="logLevel" name="logLevel" class="form-input">
+            <option value="DEBUG">DEBUG</option>
+            <option value="INFO">INFO</option>
+            <option value="WARN">WARN</option>
+            <option value="ERROR">ERROR</option>
+          </select>
+          <p class="text-sm text-gray-500 mt-1">System-wide logging level</p>
+        </div>
+        
+        <div class="form-group">
+          <label for="localSearchCronSchedule" class="form-label">Local Search Schedule</label>
+          <input type="text" id="localSearchCronSchedule" name="localSearchCronSchedule" class="form-input">
+          <p class="text-sm text-gray-500 mt-1">Cron schedule for local search task (e.g., "0 * * * *" for every hour)</p>
+        </div>
+        
+        <div class="form-group">
+          <label for="syncIssuesCronSchedule" class="form-label">Sync Issues Schedule</label>
+          <input type="text" id="syncIssuesCronSchedule" name="syncIssuesCronSchedule" class="form-input">
+          <p class="text-sm text-gray-500 mt-1">Cron schedule for syncing issues from Redmine (e.g., "0 */6 * * *" for every 6 hours)</p>
+        </div>
+        
+        <div class="flex justify-end space-x-3 mt-6">
+          <button type="button" id="reset-btn" class="btn btn-secondary">Reset</button>
+          <button type="submit" id="save-btn" class="btn btn-primary">Save Settings</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="bg-white shadow-md rounded-md p-6 mb-8">
+      <h2 class="text-xl font-semibold mb-4 text-gray-800">System Information</h2>
+      
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <p class="text-sm font-medium text-gray-700">Last Updated</p>
+          <p id="last-updated" class="text-gray-900">Loading...</p>
+        </div>
+        <div>
+          <p class="text-sm font-medium text-gray-700">Current Year Range</p>
+          <p class="text-gray-900">2015 - <span id="current-year"></span></p>
+        </div>
+      </div>
+    </div>
+
+    <footer class="mt-8 text-center text-gray-500 text-sm">
+      <p>&copy; 2025 Redmine App - Admin Interface</p>
+    </footer>
+  </div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const settingsForm = document.getElementById('settings-form');
+      const resetBtn = document.getElementById('reset-btn');
+      const statusMessage = document.getElementById('status-message');
+      const lastUpdatedEl = document.getElementById('last-updated');
+      const currentYearEl = document.getElementById('current-year');
+      
+      // Set current year in the UI
+      currentYearEl.textContent = new Date().getFullYear();
+      
+      // Function to show status messages
+      const showMessage = (message, type = 'success') => {
+        statusMessage.innerHTML = `<div class="alert ${type === 'success' ? 'alert-success' : 'alert-error'}">${message}</div>`;
+        statusMessage.classList.remove('hidden');
+        setTimeout(() => {
+          statusMessage.classList.add('hidden');
+        }, 5000);
+      };
+      
+      // Function to format date
+      const formatDate = (dateString) => {
+        const date = new Date(dateString);
+        return date.toLocaleString();
+      };
+      
+      // Function to load settings from API
+      const loadSettings = async () => {
+        try {
+          console.log('public/index.html loadSettings Fetching current application settings');
+          const response = await fetch('/api/app/configure');
+          
+          if (!response.ok) {
+            throw new Error(`HTTP error ${response.status}: ${await response.text()}`);
+          }
+          
+          const settings = await response.json();
+          console.log('public/index.html loadSettings Settings retrieved successfully', { data: settings });
+          
+          // Update form fields
+          document.getElementById('itemsPerPage').value = settings.itemsPerPage || '';
+          document.getElementById('logLevel').value = settings.logLevel || 'INFO';
+          document.getElementById('localSearchCronSchedule').value = settings.localSearchCronSchedule || '';
+          document.getElementById('syncIssuesCronSchedule').value = settings.syncIssuesCronSchedule || '';
+          
+          // Update last updated timestamp
+          if (settings.lastUpdated) {
+            lastUpdatedEl.textContent = formatDate(settings.lastUpdated);
+          } else {
+            lastUpdatedEl.textContent = 'Never';
+          }
+        } catch (error) {
+          console.log('public/index.html loadSettings Error loading settings', 
+            { message: error.message, stack: error.stack });
+          showMessage(`Error loading settings: ${error.message}`, 'error');
+        }
+      };
+      
+      // Function to save settings via API
+      const saveSettings = async (formData) => {
+        try {
+          console.log('public/index.html saveSettings Saving application settings', { data: formData });
+          const response = await fetch('/api/app/configure', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(formData),
+          });
+          
+          if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.errors ? errorData.errors.join(', ') : `HTTP error ${response.status}`);
+          }
+          
+          const result = await response.json();
+          console.log('public/index.html saveSettings Settings saved successfully', { data: result });
+          showMessage('Settings updated successfully');
+          
+          // Reload settings to reflect changes
+          loadSettings();
+        } catch (error) {
+          console.log('public/index.html saveSettings Error saving settings', 
+            { message: error.message, stack: error.stack });
+          showMessage(`Error saving settings: ${error.message}`, 'error');
+        }
+      };
+      
+      // Handle form submission
+      settingsForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        
+        const formData = {
+          itemsPerPage: document.getElementById('itemsPerPage').value,
+          logLevel: document.getElementById('logLevel').value,
+          localSearchCronSchedule: document.getElementById('localSearchCronSchedule').value,
+          syncIssuesCronSchedule: document.getElementById('syncIssuesCronSchedule').value,
+        };
+        
+        await saveSettings(formData);
+      });
+      
+      // Handle reset button
+      resetBtn.addEventListener('click', () => {
+        loadSettings();
+      });
+      
+      // Initial load of settings
+      loadSettings();
+    });
+  </script>
+</body>
+</html>
