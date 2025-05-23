@@ -199,7 +199,7 @@ npm audit
 
 ## License
 
-[Your License Here]
+MIT
 
 ## Contributing
 
