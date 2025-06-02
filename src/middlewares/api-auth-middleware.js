@@ -11,6 +11,11 @@ const apiAuthMiddleware = async (req, res, next) => {
   const functionName = 'apiAuthMiddleware';
   logger.info(`${fileName} ${functionName} ENTERING: ${req.method} ${req.originalUrl}`);
 
+  if (process.env.API_NO_AUTH === '1') {
+    logger.info(`${fileName} ${functionName} API_NO_AUTH is set to 1. Skipping authentication for all requests.`);
+    return next();
+  }
+
   // --- Start of critical section for Swagger/OPTIONS skipping ---
   // 1. Skip authentication for Swagger UI and API docs related paths FIRST
   // This checks the full original URL. Useful if Swagger UI is served under /api-docs or fetches /swagger.json
