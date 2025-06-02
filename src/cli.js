@@ -7,9 +7,10 @@ import { formatWithEmoji } from './utils/emoji.js';
 import config from './config/config.js';
 
 // Import command handlers
-import { handleFetchIssues } from './commands/issueCommands.js';
+import { handleFetchIssues, handleFetchIssueById } from './commands/issueCommands.js';
 import { handleFetchProjects, handleExploreProjects } from './commands/projectCommands.js';
 import { handleLocalSearchYearContains } from './commands/localSearchCommands.js';
+import { serverActionsMenu } from './commands/serverCommands.js';
 
 /**
  * Main CLI interface entry point
@@ -47,6 +48,10 @@ const cli = {
               value: 'fetchIssues',
             },
             {
+              name: formatWithEmoji('Fetch Issue by ID', 'search'), // Using 'search' emoji for specificity
+              value: 'fetchIssueById',
+            },
+            {
               name: formatWithEmoji('Fetch Projects', 'project'),
               value: 'fetchProjects',
             },
@@ -57,6 +62,10 @@ const cli = {
             {
               name: formatWithEmoji('Local search - Year - Contains', 'search'),
               value: 'localSearchYearContains',
+            },
+            {
+              name: formatWithEmoji('API Server Actions...', 'rocket'), // Changed text to reflect submenu
+              value: 'serverActions',
             },
             new inquirer.Separator('─'.repeat(40)),
             {
@@ -77,6 +86,11 @@ const cli = {
           logger.info(`${fileName} ${functionName} User selected to fetch issues`);
           await handleFetchIssues();
           break;
+
+        case 'fetchIssueById':
+          logger.info(`${fileName} ${functionName} User selected to fetch issue by ID`);
+          await handleFetchIssueById();
+          break;
           
         case 'fetchProjects':
           logger.info(`${fileName} ${functionName} User selected to fetch projects`);
@@ -91,6 +105,18 @@ const cli = {
         case 'localSearchYearContains':
           logger.info(`${fileName} ${functionName} User selected local search by year and content`);
           await handleLocalSearchYearContains();
+          break;
+
+        case 'serverActions':
+          logger.info(`${fileName} ${functionName} User selected API Server Actions.`);
+          const serverActionResult = await serverActionsMenu();
+          if (serverActionResult === 'server_action_completed') {
+            // If server started or another action that terminates this flow was completed,
+            // we don't want to loop back to mainMenu or prompt continue from here.
+            // The serverCommands.js module handles its own lifecycle for these cases.
+            return; 
+          }
+          // If 'back_to_main' or other, it will fall through to promptContinue and mainMenu loop.
           break;
           
         case 'settings':
@@ -226,8 +252,8 @@ const cli = {
         validation.errors.forEach(error => {
           console.error(`- ${error}`);
         });
-        console.log('\nPlease create a .env file by copying .env.example and fill in your details.\n');
-        process.exit(1);
+        console.log('\nWARN: No .env file found. Please create a .env file by copying .env.example and fill in your details.\n');
+        //process.exit(1);
       }
       
       logger.info(`${fileName} ${functionName} Starting Redmine CLI`);

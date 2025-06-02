@@ -2,9 +2,11 @@ import inquirer from 'inquirer';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { fetchIssues, fetchUsers, fetchAllIssuesWithCriteria } from '../services/redmineService.js';
+import { getIssueById as getIssueByIdService } from '../services/issueService.js'; // Renamed to avoid conflict if any local getIssueById existed
 import { handleError } from '../utils/errorHandler.js'; // Added handleError import
 import { logger } from '../utils/logger.js';
 import { formatWithEmoji } from '../utils/emoji.js';
+import { displayFormattedIssueDetails, getPriorityEmoji, getStatusEmoji } from '../utils/issueDisplayUtils.js';
 import config from '../config/config.js';
 
 /**
@@ -434,130 +436,73 @@ export const viewIssueDetails = async (issues, currentPage, itemsPerPage) => {
   // Find the selected issue
   const selectedIssue = issues.find(issue => issue.id === issueId);
   
-  if (!selectedIssue) {
-    console.log(formatWithEmoji('Issue not found.', 'error'));
-    return;
-  }
+if (!selectedIssue) {
+console.log(formatWithEmoji('Issue not found.', 'error'));
+return;
+}
   
-  logger.debug(`${fileName} ${functionName} Viewing details for issue #${issueId}`, { selectedIssue });
+logger.info(`${fileName} ${functionName} Displaying details for issue ${selectedIssue.id}`);
+displayFormattedIssueDetails(selectedIssue);
   
-  // Display issue details
-  console.clear();
-  console.log('\n' + formatWithEmoji(`Issue #${selectedIssue.id} Details`, 'issue'));
-  console.log('═'.repeat(50));
-  
-  console.log(formatWithEmoji(`Subject: ${selectedIssue.subject}`, 'subject'));
-  console.log(`${getStatusEmoji(selectedIssue.status?.name)} Status: ${selectedIssue.status?.name || 'Unknown'}`);
-  console.log(`${getPriorityEmoji(selectedIssue.priority?.name)} Priority: ${selectedIssue.priority?.name || 'Unknown'}`);
-  
-  if (selectedIssue.project) {
-    console.log(formatWithEmoji(`Project: ${selectedIssue.project.name}`, 'project'));
-  }
-  
-  if (selectedIssue.author) {
-    console.log(formatWithEmoji(`Author: ${selectedIssue.author.name}`, 'user'));
-  }
-  
-  if (selectedIssue.assigned_to) {
-    console.log(formatWithEmoji(`Assigned to: ${selectedIssue.assigned_to.name}`, 'user'));
-  }
-  
-  if (selectedIssue.start_date) {
-    console.log(formatWithEmoji(`Start date: ${selectedIssue.start_date}`, 'date'));
-  }
-  
-  if (selectedIssue.due_date) {
-    console.log(formatWithEmoji(`Due date: ${selectedIssue.due_date}`, 'date'));
-  }
-  
-  if (selectedIssue.done_ratio !== undefined) {
-    console.log(formatWithEmoji(`Progress: ${selectedIssue.done_ratio}%`, 'progress'));
-  }
-  
-  console.log('─'.repeat(50));
-  console.log('Description:');
-  console.log(selectedIssue.description ? 
-    // Simple HTML to text conversion for description
-    selectedIssue.description.replace(/<\/?[^>]+(>|$)/g, '') : 
-    'No description available.');
-  
-  if (selectedIssue.custom_fields && selectedIssue.custom_fields.length > 0) {
-    console.log('─'.repeat(50));
-    console.log('Custom Fields:');
-    
-    selectedIssue.custom_fields.forEach(field => {
-      if (field.value) {
-        console.log(`${field.name}: ${field.value}`);
-      }
-    });
-  }
-  
-  console.log('═'.repeat(50));
-  
-  // Wait for user to press a key to continue
-  await inquirer.prompt([
-    {
-      type: 'input',
-      name: 'continue',
-      message: 'Press Enter to go back...'
+// Wait for user to press a key to continue
+  await inquirer.prompt([{
+    type: 'input',
+    name: 'continue',
+    message: 'Press Enter to go back...'
+  }]);
+};
+
+
+/**
+ * Handles fetching and displaying a single issue by its ID.
+ */
+export const handleFetchIssueById = async () => {
+  const fileName = 'src/commands/issueCommands.js';
+  const functionName = 'handleFetchIssueById';
+  logger.info(`${fileName} ${functionName} Prompting for issue ID.`);
+
+  try {
+    const { issueIdInput } = await inquirer.prompt([
+      {
+        type: 'input',
+        name: 'issueIdInput',
+        message: formatWithEmoji('Enter the ID of the issue you want to fetch:', 'input'),
+        validate: (value) => {
+          const id = parseInt(value, 10);
+          if (isNaN(id) || id <= 0) {
+            return 'Please enter a valid positive number for the issue ID.';
+          }
+          return true;
+        },
+      },
+    ]);
+
+    const issueId = parseInt(issueIdInput, 10);
+    logger.info(`${fileName} ${functionName} Attempting to fetch issue with ID: ${issueId}`);
+    console.log(formatWithEmoji(`Fetching issue #${issueId}...`, 'fetch'));
+
+    const issue = await getIssueByIdService(issueId);
+
+    if (issue) {
+      logger.info(`${fileName} ${functionName} Successfully fetched issue ${issueId}. Displaying details.`);
+      displayFormattedIssueDetails(issue);
+    } else {
+      logger.warn(`${fileName} ${functionName} Issue ${issueId} not found.`);
+      console.log(formatWithEmoji(`Issue #${issueId} not found.`, 'error'));
     }
-  ]);
+  } catch (error) {
+    // Log the error with context using the imported handleError
+    logger.error(`${fileName} ${functionName} Error fetching issue by ID.`, { message: error.message, stack: error.stack });
+    // Display a user-friendly error message
+    console.log(formatWithEmoji('An error occurred while fetching the issue. Check logs for details.', 'error'));
+    // handleError(error, functionName); // Optionally use the global error handler if it provides more context or exits
+  }
 };
 
-/**
- * Get emoji for priority level
- * @param {string} priorityName - Name of the priority
- * @returns {string} Emoji representing the priority
- */
-const getPriorityEmoji = (priorityName) => {
-  if (!priorityName) return formatWithEmoji('', 'priority.normal');
-  
-  const lowerPriority = priorityName.toLowerCase();
-  
-  if (lowerPriority.includes('low') || lowerPriority.includes('basse')) {
-    return formatWithEmoji('', 'priority.low');
-  } else if (lowerPriority.includes('normal') || lowerPriority.includes('normale')) {
-    return formatWithEmoji('', 'priority.normal');
-  } else if (lowerPriority.includes('high') || lowerPriority.includes('haute')) {
-    return formatWithEmoji('', 'priority.high');
-  } else if (lowerPriority.includes('urgent')) {
-    return formatWithEmoji('', 'priority.urgent');
-  } else if (lowerPriority.includes('immediate')) {
-    return formatWithEmoji('', 'priority.immediate');
-  }
-  
-  return formatWithEmoji('', 'priority.normal');
-};
-
-/**
- * Get emoji for issue status
- * @param {string} statusName - Name of the status
- * @returns {string} Emoji representing the status
- */
-const getStatusEmoji = (statusName) => {
-  if (!statusName) return formatWithEmoji('', 'status.new');
-  
-  const lowerStatus = statusName.toLowerCase();
-  
-  if (lowerStatus.includes('new') || lowerStatus.includes('déclaré')) {
-    return formatWithEmoji('', 'status.new');
-  } else if (lowerStatus.includes('progress') || lowerStatus.includes('cours')) {
-    return formatWithEmoji('', 'status.inProgress');
-  } else if (lowerStatus.includes('resolved') || lowerStatus.includes('résolu')) {
-    return formatWithEmoji('', 'status.resolved');
-  } else if (lowerStatus.includes('closed') || lowerStatus.includes('fermé')) {
-    return formatWithEmoji('', 'status.closed');
-  } else if (lowerStatus.includes('feedback') || lowerStatus.includes('retour')) {
-    return formatWithEmoji('', 'status.feedback');
-  } else if (lowerStatus.includes('reject') || lowerStatus.includes('rejeté')) {
-    return formatWithEmoji('', 'status.rejected');
-  }
-  
-  return formatWithEmoji('', 'status.new');
-};
 
 export default {
   handleFetchIssues,
   displayIssuesWithPagination,
-  viewIssueDetails
+  viewIssueDetails,
+  handleFetchIssueById
 };
