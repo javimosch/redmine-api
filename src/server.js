@@ -3,6 +3,8 @@ import cron from 'node-cron';
 import dotenv from 'dotenv';
 import fs from 'fs-extra';
 import path from 'path';
+import sqlite3 from 'sqlite3';
+import expandTilde from 'expand-tilde';
 import { logger } from './utils/logger.js';
 import { fetchAndSaveAllIssuesService } from './utils/issueFetcher.js';
 import { processLocalSearch } from './utils/localSearchProcessor.js';
@@ -11,9 +13,12 @@ import swaggerJsdoc from 'swagger-jsdoc';
 import basicAuth from 'express-basic-auth';
 import mongoose from 'mongoose';
 import appConfigRoutes from './routes/appConfigRoutes.js';
+import issueRoutes from './routes/issueRoutes.js';
 import { getConfig, refreshConfig } from './utils/configLoader.js';
 import apiAuthMiddleware from './middlewares/api-auth-middleware.js';
-
+import { setDbMode, setSqliteDb } from './utils/appState.js';
+import SqliteSettings from './models/SqliteSettings.js';
+import cors from 'cors'
 dotenv.config(); // Load environment variables from .env file
 
 const app = express();
@@ -21,6 +26,7 @@ const port = process.env.PORT || 3000;
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const MONGO_URI = process.env.MONGO_URI;
 
+app.use(cors('*'));
 app.use(express.json());
 
 // --- Swagger Setup ---
@@ -49,7 +55,7 @@ const swaggerOptions = {
       }
     }
   },
-  apis: ['./src/server.js'], // files containing annotations as JSDoc
+  apis: ['./src/server.js', './src/controllers/issueController.js'], // files containing annotations as JSDoc
 };
 
 const swaggerSpec = swaggerJsdoc(swaggerOptions);
@@ -93,6 +99,10 @@ logger.info('src/server.js /api/app/configure route registered.');
 // It has internal skips for OPTIONS, Swagger paths (as a safeguard), etc.
 app.use('/api', apiAuthMiddleware); 
 logger.info('src/server.js API Key Auth Middleware registered for subsequent /api routes.');
+
+// Mount issue specific routes (e.g., /api/issue/:id)
+app.use('/api', issueRoutes);
+logger.info('src/server.js Issue routes registered under /api.');
 
 // --- Scheduled Tasks Configuration ---
 // Initial values from environment (these will be potentially overridden by DB settings later)
@@ -660,25 +670,66 @@ logger.info('src/server.js Static file serving from public directory enabled.');
 
 // Note: appConfigRoutes is now registered earlier, before the generic API key auth.
 
-// --- MongoDB Connection ---
+// --- Database Connection ---
 const connectDB = async () => {
   const fileName = 'src/server.js';
   const functionName = 'connectDB';
   
   if (!MONGO_URI) {
-    logger.warn(`${fileName} ${functionName} MongoDB MONGO_URI not set. Skipping MongoDB connection. Admin configuration features will not be available.`);
-    return;
-  }
-  try {
-    logger.info(`${fileName} ${functionName} Attempting to connect to MongoDB`, { data: { uri: MONGO_URI.replace(/:\/\/[^:]+:[^@]+@/, '://***:***@') } });
-    await mongoose.connect(MONGO_URI, {
-      // useNewUrlParser: true, // No longer needed in Mongoose 6+
-      // useUnifiedTopology: true, // No longer needed in Mongoose 6+
-    });
-    logger.info(`${fileName} ${functionName} MongoDB Connected successfully.`);
-  } catch (err) {
-    logger.error(`${fileName} ${functionName} MongoDB Connection Failed:`, { message: err.message, stack: err.stack });
-    // process.exit(1); // Optionally exit if DB connection is critical
+    logger.info(`${fileName} ${functionName} MongoDB MONGO_URI not set. Initializing SQLite database.`);
+    
+    try {
+      // Set database mode to sqlite
+      setDbMode('sqlite');
+      
+      // Resolve SQLite database path with tilde expansion
+      const dbDir = expandTilde('~/.redmine-api');
+      const dbPath = path.join(dbDir, 'database.sql');
+      
+      // Ensure directory exists
+      logger.info(`${fileName} ${functionName} Ensuring database directory exists: ${dbDir}`);
+      await fs.ensureDir(dbDir);
+      
+      // Initialize SQLite database
+      logger.info(`${fileName} ${functionName} Initializing SQLite database at: ${dbPath}`);
+      
+      // Create database connection
+      const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE, (err) => {
+        if (err) {
+          logger.error(`${fileName} ${functionName} SQLite connection error:`, { message: err.message, stack: err.stack });
+          throw err;
+        }
+        logger.info(`${fileName} ${functionName} SQLite database initialized successfully`);
+      });
+      
+      // Store SQLite database instance in app state
+      setSqliteDb(db);
+      
+      // Initialize settings table
+      await SqliteSettings.initSettingsTable();
+      logger.info(`${fileName} ${functionName} SQLite settings table initialized`);
+      
+      return;
+    } catch (err) {
+      logger.error(`${fileName} ${functionName} SQLite initialization failed:`, { message: err.message, stack: err.stack });
+      // Continue with application without database functionality
+    }
+  } else {
+    // MongoDB connection
+    try {
+      // Set database mode to mongo
+      setDbMode('mongo');
+      
+      logger.info(`${fileName} ${functionName} Attempting to connect to MongoDB`, { data: { uri: MONGO_URI.replace(/:\/\/[^:]+:[^@]+@/, '://***:***@') } });
+      await mongoose.connect(MONGO_URI, {
+        // useNewUrlParser: true, // No longer needed in Mongoose 6+
+        // useUnifiedTopology: true, // No longer needed in Mongoose 6+
+      });
+      logger.info(`${fileName} ${functionName} MongoDB Connected successfully.`);
+    } catch (err) {
+      logger.error(`${fileName} ${functionName} MongoDB Connection Failed:`, { message: err.message, stack: err.stack });
+      // process.exit(1); // Optionally exit if DB connection is critical
+    }
   }
 };
 
@@ -722,6 +773,12 @@ initializeApp();
 app.listen(port, () => {
   const startupFileName = 'src/server.js'; // Consistent naming for logs
   logger.info(`${startupFileName} server Startup Server listening on http://localhost:${port}`);
+
+  setTimeout(()=>{
+    if(process.env.API_NO_AUTH === '1'){
+      logger.info(`${startupFileName} server Startup API_NO_AUTH is set to 1. Skipping authentication for all requests.`);
+    }
+  },5000)
   
   // Log Sync Issues Task configuration
   logger.info(`${startupFileName} server Startup Sync Issues Task configured with schedule: ${syncIssuesCronSchedule}`);
