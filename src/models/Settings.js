@@ -1,5 +1,7 @@
 import mongoose from 'mongoose';
 import { logger } from '../utils/logger.js';
+import { getDbMode } from '../utils/appState.js';
+import SqliteSettings from './SqliteSettings.js';
 
 const settingsSchema = new mongoose.Schema({
   configKey: {
@@ -49,7 +51,7 @@ const settingsSchema = new mongoose.Schema({
   versionKey: false
 });
 
-// Static method to get or create the global settings document
+// MongoDB implementation of getSettings
 settingsSchema.statics.getSettings = async function() {
   const fileName = 'src/models/Settings.js';
   const functionName = 'getSettings';
@@ -81,6 +83,59 @@ settingsSchema.statics.getSettings = async function() {
   }
 };
 
-const Settings = mongoose.model('Settings', settingsSchema);
+const MongoSettings = mongoose.model('Settings', settingsSchema);
+
+/**
+ * Database-agnostic Settings model
+ * Routes to the appropriate implementation based on the current database mode
+ */
+const Settings = {
+  async getSettings() {
+    const fileName = 'src/models/Settings.js';
+    const functionName = 'getSettings';
+    
+    const dbMode = getDbMode();
+    logger.info(`${fileName} ${functionName} Using database mode: ${dbMode}`);
+    
+    if (dbMode === 'mongo') {
+      return MongoSettings.getSettings();
+    } else if (dbMode === 'sqlite') {
+      return SqliteSettings.getSettings();
+    } else {
+      const err = new Error(`Unsupported database mode: ${dbMode}`);
+      logger.error(`${fileName} ${functionName} ${err.message}`, { stack: err.stack });
+      throw err;
+    }
+  },
+  
+  async updateSettings(settings) {
+    const fileName = 'src/models/Settings.js';
+    const functionName = 'updateSettings';
+    
+    const dbMode = getDbMode();
+    logger.info(`${fileName} ${functionName} Using database mode: ${dbMode}`, { data: settings });
+    
+    if (dbMode === 'mongo') {
+      try {
+        const doc = await MongoSettings.findOneAndUpdate(
+          { configKey: 'global_settings' },
+          settings,
+          { new: true, upsert: true }
+        );
+        return doc;
+      } catch (error) {
+        logger.error(`${fileName} ${functionName} Error updating settings in MongoDB`, 
+          { message: error.message, stack: error.stack });
+        throw error;
+      }
+    } else if (dbMode === 'sqlite') {
+      return SqliteSettings.updateSettings(settings);
+    } else {
+      const err = new Error(`Unsupported database mode: ${dbMode}`);
+      logger.error(`${fileName} ${functionName} ${err.message}`, { stack: err.stack });
+      throw err;
+    }
+  }
+};
 
 export default Settings;
